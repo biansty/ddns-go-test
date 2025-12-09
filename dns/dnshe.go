@@ -14,15 +14,16 @@ import (
     "github.com/jeessy2/ddns-go/v6/util"
 )
 
-const defaultDNSHEBase = "https://api005.dnshe.com/index.php?m=domain_hub"
+// 固定 DNSHE API 基址（不支持自定义 baseUrl）
+const dnsheAPIBase = "https://api005.dnshe.com/index.php?m=domain_hub"
 
 type DNSHE struct {
     DNS     config.DNS
     Domains config.Domains
     TTL     int
-    BaseURL string
 }
 
+// --- 文档响应模型 ---
 type dnsheSubdomain struct {
     ID         int    `json:"id"`
     Subdomain  string `json:"subdomain"`
@@ -99,6 +100,7 @@ func (d *DNSHE) Init(dnsConf *config.DnsConfig, ipv4cache *util.IpCache, ipv6cac
     d.DNS = dnsConf.DNS
     d.Domains.GetNewIp(dnsConf)
 
+    // TTL：默认 600；无效时兜底 600
     if dnsConf.TTL == "" {
         d.TTL = 600
     } else {
@@ -107,13 +109,6 @@ func (d *DNSHE) Init(dnsConf *config.DnsConfig, ipv4cache *util.IpCache, ipv6cac
             d.TTL = 600
         } else {
             d.TTL = ttl
-        }
-    }
-
-    d.BaseURL = defaultDNSHEBase
-    if d.DNS.Params != nil {
-        if v, ok := d.DNS.Params["baseUrl"]; ok && strings.TrimSpace(v) != "" {
-            d.BaseURL = strings.TrimSpace(v)
         }
     }
 }
@@ -170,7 +165,7 @@ func (d *DNSHE) ensureSubdomainID(domain *config.Domain) (int, error) {
     full := domain.GetFullDomain()
     root := domain.DomainName
     var listResp dnsheListSubdomainsResp
-    u := fmt.Sprintf("%s&endpoint=subdomains&action=list", d.BaseURL)
+    u := fmt.Sprintf("%s&endpoint=subdomains&action=list", dnsheAPIBase)
     if err := d.request("GET", u, nil, &listResp); err != nil {
         return 0, err
     }
@@ -184,7 +179,7 @@ func (d *DNSHE) ensureSubdomainID(domain *config.Domain) (int, error) {
     subPrefix := deriveSubPrefix(full, root)
     req := dnsheRegisterReq{Subdomain: subPrefix, Rootdomain: root}
     var regResp dnsheRegisterResp
-    u = fmt.Sprintf("%s&endpoint=subdomains&action=register", d.BaseURL)
+    u = fmt.Sprintf("%s&endpoint=subdomains&action=register", dnsheAPIBase)
     if err := d.request("POST", u, req, &regResp); err != nil {
         return 0, err
     }
@@ -210,7 +205,7 @@ func (d *DNSHE) findRecordByType(subID int, domain *config.Domain, recordType st
     var resp dnsheListRecordsResp
     qs := url.Values{}
     qs.Set("subdomain_id", strconv.Itoa(subID))
-    u := fmt.Sprintf("%s&endpoint=dns_records&action=list&%s", d.BaseURL, qs.Encode())
+    u := fmt.Sprintf("%s&endpoint=dns_records&action=list&%s", dnsheAPIBase, qs.Encode())
     if err := d.request("GET", u, nil, &resp); err != nil { return nil, err }
     if !resp.Success { if resp.Error != "" { return nil, fmt.Errorf(resp.Error) }; return nil, nil }
     full := domain.GetFullDomain()
@@ -223,7 +218,7 @@ func (d *DNSHE) findRecordByType(subID int, domain *config.Domain, recordType st
 func (d *DNSHE) createRecord(subID int, recordType, ip string) error {
     req := dnsheCreateRecordReq{SubdomainID: subID, Type: recordType, Content: ip, TTL: d.TTL}
     var resp dnsheCreateRecordResp
-    u := fmt.Sprintf("%s&endpoint=dns_records&action=create", d.BaseURL)
+    u := fmt.Sprintf("%s&endpoint=dns_records&action=create", dnsheAPIBase)
     if err := d.request("POST", u, req, &resp); err != nil { return err }
     if !resp.Success { if resp.Error != "" { return fmt.Errorf(resp.Error) }; return fmt.Errorf("create record failed") }
     return nil
@@ -232,7 +227,7 @@ func (d *DNSHE) createRecord(subID int, recordType, ip string) error {
 func (d *DNSHE) updateRecord(recordID int, ip string) error {
     req := dnsheUpdateRecordReq{RecordID: recordID, Content: ip, TTL: d.TTL}
     var resp dnsheUpdateRecordResp
-    u := fmt.Sprintf("%s&endpoint=dns_records&action=update", d.BaseURL)
+    u := fmt.Sprintf("%s&endpoint=dns_records&action=update", dnsheAPIBase)
     if err := d.request("POST", u, req, &resp); err != nil { return err }
     if !resp.Success { if resp.Error != "" { return fmt.Errorf(resp.Error) }; return fmt.Errorf("update record failed") }
     return nil
