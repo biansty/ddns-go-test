@@ -254,9 +254,9 @@ func (d *DNSHE) getOrRegisterFirstSubdomain(prefix, root string) (int, error) {
 	if !regResp.Success || regResp.SubdomainID <= 0 {
 		errMsg := "注册无响应"
 		if regResp.Error != "" {
-			errMsg = regResp.Error
+			errMsg = fmt.Sprintf("注册失败: %s", regResp.Error) // 修复非常量格式字符串
 		}
-		return 0, fmt.Errorf("注册失败: %s", errMsg)
+		return 0, fmt.Errorf("注册一级子域失败: %s", errMsg)
 	}
 	return regResp.SubdomainID, nil
 }
@@ -274,9 +274,9 @@ func (d *DNSHE) findRecordByFullName(subID int, fullName, recordType string) (*d
 	if !resp.Success {
 		errMsg := "查询无结果"
 		if resp.Error != "" {
-			errMsg = resp.Error
+			errMsg = fmt.Sprintf("查询DNS记录失败: %s", resp.Error) // 修复非常量格式字符串
 		}
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("查询DNS记录异常: %s", errMsg)
 	}
 
 	// 严格匹配完整域名（保留原始字符和层级）
@@ -306,9 +306,9 @@ func (d *DNSHE) createRecordWithMultiPrefix(subID int, multiPrefix, recordType, 
 	if !resp.Success {
 		errMsg := "创建无响应"
 		if resp.Error != "" {
-			errMsg = resp.Error
+			errMsg = fmt.Sprintf("创建DNS记录失败: %s", resp.Error) // 修复非常量格式字符串
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("创建DNS记录异常: %s", errMsg)
 	}
 	return nil
 }
@@ -333,9 +333,9 @@ func (d *DNSHE) updateRecord(recordID int, ip string) error {
 	if !resp.Success {
 		errMsg := "更新无响应"
 		if resp.Error != "" {
-			errMsg = resp.Error
+			errMsg = fmt.Sprintf("更新DNS记录失败: %s", resp.Error)
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("更新DNS记录异常: %s", errMsg)
 	}
 	return nil
 }
