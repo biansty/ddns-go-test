@@ -57,7 +57,6 @@ type DNS struct {
 	Secret string
 	// ExtParam 扩展参数，用于某些DNS提供商的特殊需求（如Vercel的teamId）
 	ExtParam string
-	Params   map[string]string `yaml:"params,omitempty"`
 }
 
 type Config struct {
