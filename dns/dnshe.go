@@ -7,12 +7,39 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/jeessy2/ddns-go/v6/config"
 	"github.com/jeessy2/ddns-go/v6/util"
 )
+
+// 获取配置目录（兼容Windows/Linux/macOS）
+func getConfigDir() string {
+	// 优先读取环境变量
+	if dir := os.Getenv("DDNS_GO_CONFIG"); dir != "" {
+		return dir
+	}
+
+	// 获取用户主目录
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "./" // 降级到当前目录
+	}
+
+	// 根据系统返回默认配置目录
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(homeDir, "AppData", "Roaming", "ddns-go")
+	case "darwin":
+		return filepath.Join(homeDir, "Library", "Application Support", "ddns-go")
+	default: // Linux/FreeBSD等
+		return filepath.Join(homeDir, ".ddns_go")
+	}
+}
 
 // 固定DNSHE API基础地址
 const dnsheAPIBase = "https://api005.dnshe.com/index.php?m=domain_hub"
@@ -44,7 +71,7 @@ func (d *DNSHE) Init(dnsConf *config.DnsConfig, ipv4cache *util.IpCache, ipv6cac
 	}
 
 	// 初始化API日志器，保留最近100条记录
-	configDir := util.GetConfigDir()
+	configDir := getConfigDir()
 	d.apiLogger = NewAPILogger(configDir, 100)
 }
 
