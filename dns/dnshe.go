@@ -14,22 +14,25 @@ import (
 	"github.com/jeessy2/ddns-go/v6/util"
 )
 
-// 固定 DNSHE API 基址
+// 固定DNSHE API基础地址
 const dnsheAPIBase = "https://api005.dnshe.com/index.php?m=domain_hub"
 
+// DNSHE DNSHE服务商接口实现
 type DNSHE struct {
-	DNS     config.DNS
-	Domains config.Domains
-	TTL     int
+	DNS      config.DNS
+	Domains  config.Domains
+	TTL      int
+	apiLogger *APILogger // API响应日志器
 }
 
-// --- 初始化逻辑 ---
+// Init 初始化DNSHE客户端
 func (d *DNSHE) Init(dnsConf *config.DnsConfig, ipv4cache *util.IpCache, ipv6cache *util.IpCache) {
 	d.Domains.Ipv4Cache = ipv4cache
 	d.Domains.Ipv6Cache = ipv6cache
 	d.DNS = dnsConf.DNS
 	d.Domains.GetNewIp(dnsConf)
 
+	// 初始化TTL，默认600
 	if dnsConf.TTL == "" {
 		d.TTL = 600
 	} else {
@@ -39,15 +42,20 @@ func (d *DNSHE) Init(dnsConf *config.DnsConfig, ipv4cache *util.IpCache, ipv6cac
 			d.TTL = ttl
 		}
 	}
+
+	// 初始化API日志器，保留最近100条记录
+	configDir := util.GetConfigDir()
+	d.apiLogger = NewAPILogger(configDir, 100)
 }
 
+// AddUpdateDomainRecords 新增或更新域名解析记录
 func (d *DNSHE) AddUpdateDomainRecords() config.Domains {
 	d.addUpdateDomainRecords("A")
 	d.addUpdateDomainRecords("AAAA")
 	return d.Domains
 }
 
-// --- 核心逻辑 ---
+// addUpdateDomainRecords 处理指定类型的域名解析记录
 func (d *DNSHE) addUpdateDomainRecords(recordType string) {
 	ipAddr, domains := d.Domains.GetNewIpResult(recordType)
 	if ipAddr == "" {
@@ -63,6 +71,7 @@ func (d *DNSHE) addUpdateDomainRecords(recordType string) {
 			continue
 		}
 
+		// 查询或注册一级子域
 		firstSubDomain := fmt.Sprintf("%s.%s", firstPrefix, rootDomain)
 		if firstPrefix == "" {
 			firstSubDomain = rootDomain
@@ -74,6 +83,7 @@ func (d *DNSHE) addUpdateDomainRecords(recordType string) {
 			continue
 		}
 
+		// 确定记录名称（多级前缀）
 		recordName := multiPrefix
 		targetFullName := fullDomain
 		if multiPrefix == "" {
@@ -81,6 +91,7 @@ func (d *DNSHE) addUpdateDomainRecords(recordType string) {
 			recordName = ""
 		}
 
+		// 查询现有DNS记录
 		existRec, err := d.findRecordByFullName(subID, targetFullName, recordType)
 		if err != nil {
 			util.Log("查询DNS记录异常: %s", err)
@@ -88,6 +99,7 @@ func (d *DNSHE) addUpdateDomainRecords(recordType string) {
 			continue
 		}
 
+		// 更新或创建记录
 		if existRec != nil {
 			if existRec.Content == ipAddr {
 				util.Log("IP未变化: %s -> %s", ipAddr, fullDomain)
@@ -112,7 +124,8 @@ func (d *DNSHE) addUpdateDomainRecords(recordType string) {
 	}
 }
 
-// 拆分域名到多级前缀
+// splitDomainToMultiLevels 拆分域名为根域、一级前缀、多级前缀
+// 规则: 根域为最后两段, 一级前缀为倒数第三段, 多级前缀为前面所有段
 func splitDomainToMultiLevels(fullDomain string) (rootDomain, firstPrefix, multiPrefix string) {
 	fullDomain = strings.TrimSuffix(fullDomain, ".")
 	parts := strings.Split(fullDomain, ".")
@@ -133,7 +146,7 @@ func splitDomainToMultiLevels(fullDomain string) (rootDomain, firstPrefix, multi
 	return rootDomain, firstPrefix, multiPrefix
 }
 
-// 类型转换工具函数
+// convertToInt 将interface{}类型值转为int，兼容string/int/float64类型
 func convertToInt(v interface{}) (int, error) {
 	switch val := v.(type) {
 	case int:
@@ -143,18 +156,20 @@ func convertToInt(v interface{}) (int, error) {
 	case float64:
 		return int(val), nil
 	default:
-		return 0, fmt.Errorf("不支持的类型: %T", v)
+		return 0, fmt.Errorf("不支持的类型转换: %T", v)
 	}
 }
 
-// 查询/注册一级子域
+// getOrRegisterFirstSubdomain 查询或注册一级子域
 func (d *DNSHE) getOrRegisterFirstSubdomain(prefix, root string) (int, error) {
+	// 1. 查询现有子域名列表
 	var listResp dnsheListSubdomainsResp
 	u := fmt.Sprintf("%s&endpoint=subdomains&action=list", dnsheAPIBase)
 	if err := d.request("GET", u, nil, &listResp); err != nil {
 		return 0, fmt.Errorf("查询子域名列表失败: %s", err)
 	}
 
+	// 2. 匹配目标一级子域
 	targetFullDomain := fmt.Sprintf("%s.%s", prefix, root)
 	if prefix == "" {
 		targetFullDomain = root
@@ -167,6 +182,7 @@ func (d *DNSHE) getOrRegisterFirstSubdomain(prefix, root string) (int, error) {
 		}
 	}
 
+	// 3. 注册新的一级子域
 	if prefix == "" {
 		return 0, fmt.Errorf("根域%s未注册", root)
 	}
@@ -177,9 +193,10 @@ func (d *DNSHE) getOrRegisterFirstSubdomain(prefix, root string) (int, error) {
 		return 0, fmt.Errorf("注册失败: %s", err)
 	}
 
+	// 4. 转换subdomain_id为int类型
 	subID, err := convertToInt(regResp.SubdomainID)
 	if err != nil {
-		return 0, fmt.Errorf("subdomain_id 转换失败: %s", err)
+		return 0, fmt.Errorf("subdomain_id转换失败: %s", err)
 	}
 
 	if !regResp.Success || subID <= 0 {
@@ -192,7 +209,7 @@ func (d *DNSHE) getOrRegisterFirstSubdomain(prefix, root string) (int, error) {
 	return subID, nil
 }
 
-// 按完整域名查询DNS记录
+// findRecordByFullName 按完整域名查询DNS记录
 func (d *DNSHE) findRecordByFullName(subID int, fullName, recordType string) (*dnsheRecord, error) {
 	var resp dnsheListRecordsResp
 	qs := url.Values{}
@@ -218,7 +235,7 @@ func (d *DNSHE) findRecordByFullName(subID int, fullName, recordType string) (*d
 	return nil, nil
 }
 
-// 创建带多级前缀的DNS记录
+// createRecordWithMultiPrefix 创建带多级前缀的DNS记录
 func (d *DNSHE) createRecordWithMultiPrefix(subID int, multiPrefix, recordType, ip string) error {
 	req := dnsheCreateRecordReq{
 		SubdomainID: subID,
@@ -241,6 +258,7 @@ func (d *DNSHE) createRecordWithMultiPrefix(subID int, multiPrefix, recordType, 
 		return fmt.Errorf("创建DNS记录异常: %s", errMsg)
 	}
 
+	// 打印record_id日志，不显示原始响应
 	switch v := resp.RecordID.(type) {
 	case int:
 		util.Log("创建记录成功，record_id (int): %d", v)
@@ -252,7 +270,7 @@ func (d *DNSHE) createRecordWithMultiPrefix(subID int, multiPrefix, recordType, 
 	return nil
 }
 
-// 更新DNS记录
+// updateRecord 更新DNS记录
 func (d *DNSHE) updateRecord(recordID int, ip string) error {
 	req := dnsheUpdateRecordReq{RecordID: recordID, Content: ip, TTL: d.TTL}
 	var resp dnsheUpdateRecordResp
@@ -271,7 +289,7 @@ func (d *DNSHE) updateRecord(recordID int, ip string) error {
 	return nil
 }
 
-// 通用HTTP请求方法
+// request 通用HTTP请求方法，处理API通信
 func (d *DNSHE) request(method, urlStr string, data interface{}, result interface{}) (err error) {
 	var reqBody bytes.Buffer
 	if method != "GET" && data != nil {
@@ -282,6 +300,7 @@ func (d *DNSHE) request(method, urlStr string, data interface{}, result interfac
 		reqBody = *bytes.NewBuffer(jsonBytes)
 	}
 
+	// 创建HTTP请求
 	req, err := http.NewRequest(method, urlStr, &reqBody)
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %s", err)
@@ -290,6 +309,7 @@ func (d *DNSHE) request(method, urlStr string, data interface{}, result interfac
 	req.Header.Set("X-API-Secret", d.DNS.Secret)
 	req.Header.Set("Content-Type", "application/json")
 
+	// 发送请求
 	client := util.CreateHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -297,18 +317,27 @@ func (d *DNSHE) request(method, urlStr string, data interface{}, result interfac
 	}
 	defer resp.Body.Close()
 
+	// 读取原始响应
 	rawBody, _ := io.ReadAll(resp.Body)
-	util.Log("API 原始响应: %s", string(rawBody))
+	rawRespStr := string(rawBody)
 
+	// 写入API.log，不输出到终端日志
+	if d.apiLogger != nil {
+		if err := d.apiLogger.WriteLog(rawRespStr); err != nil {
+			util.Log("写入API日志失败: %s", err)
+		}
+	}
+
+	// 反序列化响应
 	bodyReader := bytes.NewReader(rawBody)
 	if err = json.NewDecoder(bodyReader).Decode(result); err != nil {
-		util.Log("JSON 反序列化失败: %s, 但 API 可能已执行成功", err)
+		util.Log("JSON反序列化失败，但API可能已执行成功")
 		return nil
 	}
 	return nil
 }
 
-// 适配原有接口
+// --- 适配原有接口 ---
 func (d *DNSHE) findRecordByType(subID int, domain *config.Domain, recordType string) (*dnsheRecord, error) {
 	return d.findRecordByFullName(subID, domain.GetFullDomain(), recordType)
 }
@@ -317,7 +346,7 @@ func (d *DNSHE) createRecord(subID int, recordType, ip string) error {
 	return d.createRecordWithMultiPrefix(subID, "", recordType, ip)
 }
 
-// --- 扩展功能（可选）---
+// --- 扩展功能接口 ---
 // GetSubdomainDetail 获取子域名详情
 func (d *DNSHE) GetSubdomainDetail(subdomainID int) (*dnsheSubdomainDetailResp, error) {
 	var resp dnsheSubdomainDetailResp
@@ -330,7 +359,7 @@ func (d *DNSHE) GetSubdomainDetail(subdomainID int) (*dnsheSubdomainDetailResp, 
 	return &resp, nil
 }
 
-// GetQuota 查询配额
+// GetQuota 查询账户配额
 func (d *DNSHE) GetQuota() (*dnsheQuota, error) {
 	var resp dnsheQuotaResp
 	u := fmt.Sprintf("%s&endpoint=quota", dnsheAPIBase)
